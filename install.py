@@ -89,6 +89,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--uninstall", action="store_true")
     ap.add_argument("--no-pip", action="store_true")
     ap.add_argument("--no-model", action="store_true")
+    ap.add_argument("--handsfree", action="store_true",
+                    help="start in hands-free mode (wake words) instead of push-to-talk")
     args = ap.parse_args(argv)
 
     if args.uninstall:
@@ -100,12 +102,26 @@ def main(argv: list[str] | None = None) -> int:
     if sys.version_info < (3, 9):
         print("Python 3.9 or newer is required.")
         return 1
+    if sys.version_info >= (3, 14):
+        print("Note: Python 3.14 is very new; if the speech packages fail to install, use Python 3.10 to 3.13.")
+    if not shutil.which("claude"):
+        print("Warning: `claude` was not found on PATH. Install Claude Code first (voice summaries and typing need it).")
     if not args.no_pip:
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", str(ROOT / "requirements.txt")])
+        try:
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", str(ROOT / "requirements.txt")])
+        except subprocess.CalledProcessError:
+            print("Installing the Python packages failed. Try Python 3.10 to 3.13, then run this again.")
+            return 1
     cfg_path, example = ROOT / "config.json", ROOT / "config.example.json"
     if not cfg_path.exists() and example.exists():
         shutil.copy2(example, cfg_path)
         print("Created config.json")
+    if args.handsfree:
+        preset = json.loads((ROOT / "config.handsfree.example.json").read_text(encoding="utf-8"))
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8")) if cfg_path.exists() else {}
+        cfg.update(preset)
+        cfg_path.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
+        print('Hands-free mode on: say "hey jarvis", "claude" or "listen" to start talking.')
     update_settings(args.settings)
     update_command(args.settings)
     print(f"/voice command installed in {command_path(args.settings)}")
@@ -117,7 +133,7 @@ def main(argv: list[str] | None = None) -> int:
         cfg = load_config()
         print(f"Downloading speech model '{cfg['whisper_model']}' (first run only)...")
         Transcriber(cfg["whisper_model"], cfg["whisper_compute_type"]).load()
-    print("Done. Open Claude Code and run:  python voice.py status")
+    print("Done. Restart Claude Code, then run /voice start (or: python voice.py start).")
     if sys.platform != "win32":
         print("macOS/Linux: run `claude` inside tmux so voice can type into it; Linux also needs espeak-ng.")
     return 0

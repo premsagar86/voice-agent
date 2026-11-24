@@ -106,3 +106,13 @@ def test_install_and_remove_voice_slash_command(tmp_path):
     assert "voice.py $ARGUMENTS" in cmd and "\\" not in cmd.split("---")[2]
     install.update_command(settings, remove_only=True)
     assert not (tmp_path / "commands" / "voice.md").exists()
+
+
+def test_handsfree_preset_is_valid_and_overrides_push_to_talk():
+    import json
+    from pathlib import Path
+    preset = json.loads((Path(__file__).resolve().parent.parent / "config.handsfree.example.json")
+                        .read_text(encoding="utf-8"))
+    assert preset["listen_mode"] == "auto" and "claude" in preset["wake_words"]
+    from voice_agent.config import DEFAULT_CONFIG
+    assert set(preset) <= set(DEFAULT_CONFIG)  # every key in the preset is a real setting

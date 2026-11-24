@@ -12,9 +12,9 @@ Talk to Claude Code and hear the answer. Two parts:
 
 ## Install (any PC)
 
-    git clone <repo-url> voice-agent
+    git clone https://github.com/premsagar86/voice-agent voice-agent
     cd voice-agent
-    python install.py
+    python install.py --handsfree     # drop --handsfree for push-to-talk (hold F9)
 
 `install.py` installs the packages, creates `config.json`, adds the hooks to `~/.claude/settings.json`
 (using this folder's real path) and downloads the speech model. Restart the Claude CLI once afterwards.
@@ -33,6 +33,16 @@ Targets (`"target"` in config.json):
 - `interactive` (default): finds the running Claude CLI process and sends keys straight to its console,
   so focus does not matter. Replies are spoken by the hooks.
 - `headless`: runs a hidden `claude -p`; the app speaks the reply and can ask for permission out loud.
+
+## Requirements
+
+- Windows 10/11 (macOS/Linux: see "Install on any PC"), a microphone, headphones recommended.
+- Python 3.10 to 3.13 (3.9 and 3.14 are untested), and Claude Code installed with `claude` on PATH.
+- Allow microphone access: Windows Settings > Privacy > Microphone.
+- Run the Claude CLI in a normal console window (Windows Terminal, PowerShell, VS Code terminal).
+- About 500 MB for the speech model (downloaded once). CPU only is fine; `base.en` is the fastest, `small.en` more accurate.
+
+Tested on one Windows 11 PC (VS Code terminal). Other setups are not verified yet; issues and fixes are welcome.
 
 ## Voice commands (say the whole phrase)
 
@@ -100,6 +110,10 @@ MIT, see `LICENSE`.
 | 5 Polish | tray, wake word (transcript based), launcher, config example done; installer build is optional (`build.ps1`) |
 
 ## Troubleshooting
+- Nothing happens when I talk: run `python run.py --test-mic`; check Windows microphone permission and the default input device.
+- Install fails on `faster-whisper` / `ctranslate2`: use Python 3.10 to 3.13.
+- `/voice` not found: run `python install.py` again and restart Claude Code.
+- Hands-free hears itself: use headphones.
 - Mode did not change: run.py's startup line names the CLI process. Set `cli_pid` if it picked the wrong one.
 - "stop" not heard: use headphones (the mic hears the speaker) or press F10.
 - Hard crash: see `crash.log`. Errors go to `speak_hook.log`.

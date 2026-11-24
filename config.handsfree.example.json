@@ -1,0 +1,13 @@
+{
+  "listen_mode": "auto",
+  "wake_words": [
+    "hey jarvis",
+    "claude",
+    "listen"
+  ],
+  "wake_timeout": -1,
+  "vad_silence": 2,
+  "clap_approve": false,
+  "whisper_model": "base.en",
+  "persona": ""
+}
