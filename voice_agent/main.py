@@ -152,6 +152,7 @@ class VoiceLoop:
                 self.show(f"(muted, mic closed: press {self.cfg.get('unmute_hotkey', 'f8').upper()} to unmute)")
             else:
                 self.show("(muted: only \"unmute\" or \"Claude unmute\" is heard)")
+            self._say("Muted.")  # spoken confirmation; the mic is already muted, so no listener opens for it
         elif name == "chat":  # a plan is waiting: do not accept it, then take the changes you say next
             rejected = self.agent.reject_plan() if hasattr(self.agent, "reject_plan") else None
             if rejected:

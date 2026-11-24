@@ -517,3 +517,11 @@ def test_muted_still_hears_only_unmute_or_claude_unmute(monkeypatch, tmp_path):
     assert not loop.mic_muted and said[-1] == "Listening."
     loop.run_turn()
     assert agent.prompts == ["list files", "run it now", "again"]
+
+
+def test_mute_says_muted(monkeypatch, tmp_path):
+    import voice_agent.main as m
+    monkeypatch.setattr(m, "SESSION_PATH", tmp_path / "session.stamp")
+    loop, agent, said = make_loop(["mute"], {"listen_mode": "auto", "wake_words": ["claude"]})
+    loop.run_turn()
+    assert said == ["Muted."] and loop.mic_muted
