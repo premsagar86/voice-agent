@@ -1,0 +1,16 @@
+__pycache__/
+.pytest_cache/
+.speaking.pid
+mode_state.json
+sessions.json
+mode.json
+*.log
+*.pid
+config.json
+
+voice.muted
+session.stamp
+*.voice-backup
+dist/
+build/
+*.spec
