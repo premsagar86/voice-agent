@@ -33,6 +33,12 @@ def mode_from_screen(rows: list[str]) -> str | None:
 
 
 # ------------------------------------------------------------------ parent side
+def plan_prompt_on_screen(rows: list[str]) -> bool:
+    """True while Claude Code shows its plan approval dialog (accept / keep planning)."""
+    text = " ".join(rows[-25:]).lower()
+    return "keep planning" in text or "would you like to proceed" in text or "ready to code" in text
+
+
 def pick_cli_pid(procs: list[dict]) -> int:
     """From Win32_Process rows, the interactive Claude Code CLI (not hosts or headless `-p` runs)."""
     ok = []

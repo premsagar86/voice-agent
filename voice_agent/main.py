@@ -94,9 +94,18 @@ class VoiceLoop:
     def _command(self, name: str) -> None:
         if name == "repeat":
             self._say(self.last_spoken or "There is nothing to repeat yet.")
-        elif name == "chat":  # open the conversation: no wake word needed until the session ends
+        elif name == "listen":  # open the conversation: no wake word needed until the session ends
             self._open_window(float(self.cfg.get("wake_timeout", -1)) or -1)
             self._say("Listening.")
+        elif name == "chat":  # a plan is waiting: do not accept it, then take the changes you say next
+            rejected = self.agent.reject_plan() if hasattr(self.agent, "reject_plan") else None
+            if rejected:
+                self._open_window(float(self.cfg.get("wake_timeout", -1)) or -1)
+                self._say("Plan not accepted. Tell me what to change.")
+            elif rejected is False:
+                self._say("There is no plan waiting.")
+            else:
+                self._say("I could not read the Claude screen to find a plan.")
         elif name in ("stop", "esc"):  # "esc" = press Escape in the CLI: interrupt what Claude is doing
             tts.stop_speaking()
             self.agent.interrupt()
@@ -153,8 +162,8 @@ class VoiceLoop:
                 self._session_seen, self._awake_until = stamp, 0.0
             awake = time.monotonic() < self._awake_until
             rest = strip_wake_word(text, wake)
-            if rest is None and parse_command(text) in ("chat", "esc"):
-                rest = text  # "chat" and "esc" work without the wake word
+            if rest is None and parse_command(text) in ("chat", "listen", "esc"):
+                rest = text  # "chat", "listen" and "esc" work without the wake word
             if rest is None:
                 if not awake:
                     self.show(f"(ignored, no wake word: {text})")

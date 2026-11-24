@@ -119,3 +119,23 @@ def test_loop_speaks_all_text_events_in_full_mode(tmp_path):
                      agent=Two(), speak=lambda t, c: spoken.append(t), show=lambda s: None)
     loop.run_turn()
     assert "Part one." in spoken[0] and "Part two." in spoken[0]
+
+
+def test_plan_dialog_detection_and_reject_plan():
+    from voice_agent.agents.console_input import plan_prompt_on_screen
+    from voice_agent.agents.interactive import InteractiveAdapter
+    plan_rows = ["Ready to code?", "1. Yes, auto-accept edits", "3. No, keep planning"]
+    assert plan_prompt_on_screen(plan_rows) and not plan_prompt_on_screen(["> hello", "esc to interrupt"])
+
+    class Keys:
+        def __init__(self, rows):
+            self.rows, self.sent = rows, []
+        def read_screen(self):
+            return self.rows
+        def send(self, combo):
+            self.sent.append(combo)
+
+    k = Keys(plan_rows)
+    assert InteractiveAdapter(keys=k).reject_plan() is True and k.sent == ["esc"]
+    k = Keys(["> hello"])
+    assert InteractiveAdapter(keys=k).reject_plan() is False and k.sent == []  # never presses Esc without a plan

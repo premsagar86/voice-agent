@@ -10,7 +10,8 @@ _COMMANDS: dict[str, tuple[str, ...]] = {
     "stop": ("stop", "stop it", "skip", "be quiet", "quiet", "stop talking", "skip that",
              "enough", "that s enough", "thats enough", "hush"),
     "esc": ("esc", "escape", "press escape", "hit escape", "press esc"),
-    "chat": ("chat", "chat mode", "let s chat", "lets chat", "start chat", "start chatting"),
+    "chat": ("chat", "chart", "chat mode", "let s chat", "lets chat", "change the plan"),  # reject the plan, say what to change
+    "listen": ("listen", "listen to me", "start listening", "start chat", "start chatting"),  # open the conversation
     "brief": ("brief", "be brief", "keep it short", "key points", "just the key points",
               "important points", "the important points", "only important points"),
     "summary": ("summary", "short summary", "summarize", "summarise"),

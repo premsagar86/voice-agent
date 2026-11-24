@@ -11,7 +11,7 @@ from typing import Callable, Iterator
 
 from ..config import ROOT
 from .base import Event
-from .console_input import mode_from_screen
+from .console_input import mode_from_screen, plan_prompt_on_screen
 
 STATE_PATH = ROOT / "mode_state.json"  # last permission mode seen by the UserPromptSubmit hook
 CYCLE = ["default", "acceptEdits", "plan", "auto"]  # Shift+Tab order in Claude Code
@@ -82,6 +82,20 @@ class InteractiveAdapter:
             self.keys.send("esc")
         except Exception:
             pass
+
+    def reject_plan(self) -> bool | None:
+        """Esc on the plan approval dialog: do not accept, stay in plan mode so the next message can say what
+        to change. True if rejected, False if no plan is waiting, None if the screen can't be read."""
+        reader = getattr(self.keys, "read_screen", None)
+        if reader is None:
+            return None
+        try:
+            if not plan_prompt_on_screen(reader()):
+                return False
+            self.keys.send("esc")
+            return True
+        except Exception:
+            return None
 
     def new_session(self) -> None:
         for _ in self.send("/clear"):

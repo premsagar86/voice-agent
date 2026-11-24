@@ -392,10 +392,10 @@ def test_default_conversation_stays_open_for_the_whole_session(monkeypatch, tmp_
     assert agent.prompts == ["list files", "run tests"]
 
 
-def test_chat_opens_conversation_and_esc_interrupts_without_wake_word(monkeypatch, tmp_path):
+def test_listen_opens_conversation_and_esc_interrupts_without_wake_word(monkeypatch, tmp_path):
     import voice_agent.main as m
     monkeypatch.setattr(m, "SESSION_PATH", tmp_path / "session.stamp")
-    loop, agent, said = make_loop(["esc", "chat", "list files"],
+    loop, agent, said = make_loop(["esc", "listen", "list files"],
                                   {"listen_mode": "auto", "wake_word": "hey jarvis"})
     interrupted = []
     agent.interrupt = lambda: interrupted.append(1)
@@ -406,3 +406,27 @@ def test_chat_opens_conversation_and_esc_interrupts_without_wake_word(monkeypatc
     assert said[-1] == "Listening."
     loop.run_turn()  # no wake word needed now
     assert agent.prompts == ["list files"] and n == 1
+
+
+def test_chart_is_an_alias_for_chat():
+    assert parse_command("Chart.") == "chat" and parse_command("chat") == "chat"
+    assert parse_command("chat") != parse_command("listen")
+
+
+def test_listen_is_its_own_command():
+    assert parse_command("Listen.") == "listen" and parse_command("listen to me") == "listen"
+
+
+def test_chat_rejects_the_waiting_plan_then_takes_the_changes(monkeypatch, tmp_path):
+    import voice_agent.main as m
+    monkeypatch.setattr(m, "SESSION_PATH", tmp_path / "session.stamp")
+    loop, agent, said = make_loop(["chat", "chart", "make it shorter"],
+                                  {"listen_mode": "auto", "wake_word": "hey jarvis"})
+    waiting = [False, True]
+    agent.reject_plan = lambda: waiting.pop(0)
+    loop.run_turn()
+    assert said[-1] == "There is no plan waiting."  # nothing to reject: stays quiet, no window
+    loop.run_turn()
+    assert said[-1] == "Plan not accepted. Tell me what to change."
+    loop.run_turn()  # the change is taken without the wake word
+    assert agent.prompts == ["make it shorter"]
