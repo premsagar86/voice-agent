@@ -121,21 +121,75 @@ def test_loop_speaks_all_text_events_in_full_mode(tmp_path):
     assert "Part one." in spoken[0] and "Part two." in spoken[0]
 
 
-def test_plan_dialog_detection_and_reject_plan():
-    from voice_agent.agents.console_input import plan_prompt_on_screen
+class PlanScreenKeys:
+    """Fake CLI: the real plan dialog, a cursor that moves with Down, and a log of keys/typing."""
+
+    def __init__(self, waiting=True):
+        self.cursor, self.waiting, self.log = 1, waiting, []
+
+    def read_screen(self):
+        if not self.waiting:
+            return ["> hello", "esc to interrupt"]
+        marks = [">" if i == self.cursor else " " for i in (1, 2, 3)]
+        return ["Claude has written up a plan and is ready to execute. Would you like to proceed?",
+                f"{marks[0]} 1. Yes, and use auto mode", f"{marks[1]} 2. Yes, manually approve edits",
+                f"{marks[2]} 3. Tell Claude what to change"]
+
+    def send(self, combo):
+        self.log.append(combo)
+        if combo == "down":
+            self.cursor = min(3, self.cursor + 1)
+
+    def write(self, text):
+        self.log.append(text)
+
+
+def test_plan_dialog_detection_and_option_cursor():
+    from voice_agent.agents.console_input import plan_option_selected, plan_prompt_on_screen
+    k = PlanScreenKeys()
+    assert plan_prompt_on_screen(k.read_screen()) and plan_option_selected(k.read_screen()) == 1
+    k.cursor = 3
+    assert plan_option_selected(k.read_screen()) == 3
+    assert not plan_prompt_on_screen(["> hello", "esc to interrupt"])
+
+
+def test_chat_goes_to_option_3_and_next_sentence_is_typed_there():
     from voice_agent.agents.interactive import InteractiveAdapter
-    plan_rows = ["Ready to code?", "1. Yes, auto-accept edits", "3. No, keep planning"]
-    assert plan_prompt_on_screen(plan_rows) and not plan_prompt_on_screen(["> hello", "esc to interrupt"])
+    k = PlanScreenKeys()
+    a = InteractiveAdapter(keys=k, sleep=lambda s: None)
+    assert a.reject_plan() is True and k.cursor == 3 and k.log == ["down", "down"]
+    list(a.send("make it shorter"))
+    assert k.log == ["down", "down", "make it shorter", "enter"]  # never on option 1 or 2
+    assert InteractiveAdapter(keys=PlanScreenKeys(waiting=False), sleep=lambda s: None).reject_plan() is False
 
-    class Keys:
-        def __init__(self, rows):
-            self.rows, self.sent = rows, []
+
+def test_any_sentence_in_plan_dialog_goes_to_option_3_not_accept():
+    from voice_agent.agents.interactive import InteractiveAdapter
+    k = PlanScreenKeys()
+    list(InteractiveAdapter(keys=k, sleep=lambda s: None).send("let's start"))
+    assert k.log == ["down", "down", "let's start", "enter"] and k.cursor == 3
+    k = PlanScreenKeys(waiting=False)
+    list(InteractiveAdapter(keys=k, sleep=lambda s: None).send("hello"))
+    assert k.log == ["hello", "enter"]  # no plan waiting: plain typing
+
+
+def test_cannot_find_cursor_means_nothing_is_typed():
+    from voice_agent.agents.interactive import InteractiveAdapter
+
+    class Blind(PlanScreenKeys):
         def read_screen(self):
-            return self.rows
-        def send(self, combo):
-            self.sent.append(combo)
+            return ["Would you like to proceed?", "1. Yes", "2. Yes", "3. Tell Claude what to change"]
 
-    k = Keys(plan_rows)
-    assert InteractiveAdapter(keys=k).reject_plan() is True and k.sent == ["esc"]
-    k = Keys(["> hello"])
-    assert InteractiveAdapter(keys=k).reject_plan() is False and k.sent == []  # never presses Esc without a plan
+    k = Blind()
+    assert list(InteractiveAdapter(keys=k, sleep=lambda s: None).send("hi")) == [] and k.log == []
+
+
+def test_escape_interrupts_the_plan_dialog():
+    from voice_agent.agents.interactive import InteractiveAdapter
+    k = PlanScreenKeys()
+    InteractiveAdapter(keys=k, sleep=lambda s: None).interrupt()
+    assert k.log == ["esc"]
+    k = PlanScreenKeys(waiting=False)
+    k.read_screen = lambda: ["> hello"]  # idle prompt: Esc twice opens the rewind menu, so nothing is sent
+    InteractiveAdapter(keys=k, sleep=lambda s: None).interrupt()
+    assert k.log == []

@@ -173,3 +173,21 @@ def test_fuzzy_wake_word():
     assert strip_wake_word("Jarvis", w) == ""
     assert strip_wake_word("what's in this project", w) is None
     assert strip_wake_word("HR is watching this project", w) is None
+
+
+def test_summarizer_runs_claude_without_a_visible_window(monkeypatch):
+    from voice_agent.speech import summarizer as s
+    seen = {}
+
+    class R:
+        returncode, stdout, stderr = 0, "spoken text", ""
+
+    def fake_run(cmd, **kw):
+        seen.update(kw)
+        return R()
+
+    monkeypatch.setattr(s.subprocess, "run", fake_run)
+    cfg = dict(s.__dict__.get("DEFAULT_CONFIG", {}), summarizer="claude", summarizer_model="haiku",
+               summarizer_timeout=5, max_chars=300, read_mode="summary", persona="")
+    assert s.summarize("x" * 400, cfg) == "spoken text"
+    assert seen["creationflags"] == s._NO_WINDOW

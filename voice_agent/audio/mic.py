@@ -37,8 +37,41 @@ def rms(block: np.ndarray) -> float:
     return float(np.sqrt(np.mean(np.square(block)))) if block.size else 0.0
 
 
+class ClapDetector:
+    """Double-clap detector over 30 ms blocks. A clap is a very loud burst of at most ~120 ms; two of them
+    0.2 to 1.2 s apart count. Speech and long noises are too long or too quiet to match."""
+
+    def __init__(self, threshold: float = 0.15, max_burst: int = 4, gap=(0.2, 1.2)):
+        self.threshold, self.max_burst, self.gap = threshold, max_burst, gap
+        self.t = 0.0  # time in seconds, advanced by the blocks themselves (testable without a clock)
+        self.burst = 0
+        self.last_clap = -99.0
+        self.fired = False
+
+    def feed(self, block: np.ndarray) -> bool:
+        """Process one block; True when a double clap was just completed."""
+        self.t += BLOCK / SAMPLE_RATE
+        if rms(np.asarray(block, dtype="float32").reshape(-1)) >= self.threshold:
+            self.burst += 1
+            return False
+        done, self.burst = self.burst, 0
+        if not 1 <= done <= self.max_burst:
+            return False  # nothing, or too long to be a clap
+        if self.gap[0] <= self.t - self.last_clap <= self.gap[1]:
+            self.last_clap, self.fired = -99.0, True
+            return True
+        self.last_clap = self.t
+        return False
+
+    def consume(self) -> bool:
+        """True once per detected double clap."""
+        fired, self.fired = self.fired, False
+        return fired
+
+
 def segment_speech(blocks: Iterable[np.ndarray], threshold: float = 0.02, silence_s: float = 1.0,
-                   max_s: float = 30.0, preroll_blocks: int = 8, min_s: float = 0.3) -> np.ndarray:
+                   max_s: float = 30.0, preroll_blocks: int = 8, min_s: float = 0.3,
+                   clapper: "ClapDetector | None" = None) -> np.ndarray:
     """Pure energy-based voice detection over a stream of 30 ms blocks (testable without a mic).
 
     Waits for a block above `threshold`, keeps recording until `silence_s` of quiet follows
@@ -55,6 +88,8 @@ def segment_speech(blocks: Iterable[np.ndarray], threshold: float = 0.02, silenc
     loud_blocks = 0  # loud blocks in the utterance, to reject recordings that were only noise
     for b in blocks:
         b = np.asarray(b, dtype="float32").reshape(-1)
+        if clapper is not None and clapper.feed(b):  # a double clap: stop recording, the caller handles it
+            return np.zeros(0, dtype="float32")
         loud = rms(b) >= threshold
         run = run + 1 if loud else 0
         if not speaking:
@@ -84,9 +119,9 @@ def _mic_blocks():
             yield data
 
 
-def record_auto(threshold: float = 0.02, silence_s: float = 1.0) -> np.ndarray:
-    """Hands-free: block until someone speaks, return the utterance."""
-    return segment_speech(_mic_blocks(), threshold, silence_s)
+def record_auto(threshold: float = 0.02, silence_s: float = 1.0, clapper: "ClapDetector | None" = None) -> np.ndarray:
+    """Hands-free: block until someone speaks, return the utterance (empty after a double clap)."""
+    return segment_speech(_mic_blocks(), threshold, silence_s, clapper=clapper)
 
 
 class StopHotkey:

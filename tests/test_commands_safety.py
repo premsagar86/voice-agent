@@ -131,7 +131,8 @@ def test_mode_command_is_saved_for_the_hook():
 
 
 def test_permission_mode_voice_commands():
-    loop, agent, said = make_loop(["auto mode", "accept edits on mode", "manual mode", "plan mode"])
+    loop, agent, said = make_loop(["auto mode", "accept edits on mode", "manual mode", "plan mode"],
+                                  {"announce_mode": True})
     seen = []
     for _ in range(4):
         loop.run_turn()
@@ -139,6 +140,13 @@ def test_permission_mode_voice_commands():
     assert seen == ["auto", "acceptEdits", "manual", "plan"]
     assert said[1].startswith("Accept edits on mode.")
     assert agent.prompts == []
+
+
+def test_mode_change_is_silent_by_default():
+    loop, agent, said = make_loop(["auto mode", "plan mode"])
+    loop.run_turn()
+    loop.run_turn()
+    assert agent.permission_mode == "plan" and said == []
 
 
 def test_adapter_passes_permission_mode(tmp_path):
@@ -193,11 +201,12 @@ def test_spoken_permission_approval():
 
 
 def test_mode_feedback_and_query():
-    loop, agent, said = make_loop(["change to plan mode", "what mode"])
+    loop, agent, said = make_loop(["change to plan mode", "what mode"], {"announce_mode": True})
     loop.run_turn()
     loop.run_turn()
     assert agent.permission_mode == "plan"
-    assert said[0] == said[1] and "only read and plan" in said[0]
+    assert said[1] == "Plan mode."  # the answer is just the name, nothing else
+    assert parse_command("which mode am i in") == "mode_query" and parse_command("mode") == "mode_query"
 
 
 def test_hotkey_calls_stop_now():
@@ -249,7 +258,7 @@ def test_loop_types_into_cli_and_stays_quiet(tmp_path):
     save_state("default", sp)
     agent = InteractiveAdapter(keys=Keys(), state_path=sp, sleep=lambda s: None)
     said, it = [], iter(["list the files", "plan mode"])
-    loop = VoiceLoop(dict(DEFAULT_CONFIG), record=lambda: np.ones(8000, dtype="float32"),
+    loop = VoiceLoop(dict(DEFAULT_CONFIG, announce_mode=True), record=lambda: np.ones(8000, dtype="float32"),
                      transcribe=lambda a: next(it), agent=agent,
                      speak=lambda t, c: said.append(t), show=lambda s: None)
     loop.run_turn()
@@ -430,3 +439,81 @@ def test_chat_rejects_the_waiting_plan_then_takes_the_changes(monkeypatch, tmp_p
     assert said[-1] == "Plan not accepted. Tell me what to change."
     loop.run_turn()  # the change is taken without the wake word
     assert agent.prompts == ["make it shorter"]
+
+
+def test_misheard_lets_chat_phrases_are_chat_but_normal_chart_requests_are_not():
+    for phrase in ("let chart", "Let's chart.", "lets chat", "let us chat"):
+        assert parse_command(phrase) == "chat", phrase
+    assert parse_command("make a chart of sales") is None
+
+
+def test_several_wake_words_and_misheard_claude():
+    from voice_agent.commands import strip_wake_word
+    w = ["hey jarvis", "claude", "listen"]
+    assert strip_wake_word("Claude run the tests", w) == "run the tests"
+    assert strip_wake_word("Listen, run the tests", w) == "run the tests"
+    assert strip_wake_word("Cloud, run the tests", w) == "run the tests"
+    assert strip_wake_word("hey jarvis run the tests", w) == "run the tests"
+    assert strip_wake_word("run the tests", w) is None
+    assert strip_wake_word("hey jarvis run it", "hey jarvis") == "run it"  # a single phrase still works
+
+
+def test_muted_until_listen_claude_or_unmute(monkeypatch, tmp_path):
+    import voice_agent.main as m
+    monkeypatch.setattr(m, "SESSION_PATH", tmp_path / "session.stamp")
+    monkeypatch.setattr(m.time, "sleep", lambda s: None)
+    loop, agent, said = make_loop(
+        ["run the tests", "unmute", "list files", "mute", "Claude open the docs"],
+        {"listen_mode": "auto", "mute_mode": "off", "wake_words": ["hey jarvis", "claude", "listen"]})
+    assert loop.run_turn() is False and agent.prompts == []  # no wake word: ignored
+    loop.run_turn()
+    assert said[-1] == "Listening."
+    loop.run_turn()  # unmuted: no wake word needed
+    loop.run_turn()  # mute: the mic closes
+    assert loop.run_turn() is False  # nothing is recorded while muted
+    loop.unmute()  # the F8 hotkey
+    loop.run_turn()
+    loop.run_turn()
+    assert agent.prompts == ["list files", "open the docs"]
+
+
+def test_mute_closes_the_mic_until_the_unmute_hotkey(monkeypatch, tmp_path):
+    import voice_agent.main as m
+    monkeypatch.setattr(m, "SESSION_PATH", tmp_path / "session.stamp")
+    monkeypatch.setattr(m.time, "sleep", lambda s: None)
+    opened = []
+    loop, agent, said = make_loop(["unmute", "mute", "never heard", "list files"],
+                                  {"listen_mode": "auto", "mute_mode": "off", "wake_words": ["claude"]})
+    real_record = loop.record
+    loop.record = lambda: (opened.append(1), real_record())[1]
+    loop.monitor = lambda: (opened.append("monitor"), __import__("contextlib").nullcontext())[1]
+    loop.run_turn()  # unmute (opens the conversation)
+    loop.run_turn()  # mute
+    assert loop.mic_muted
+    opened.clear()
+    assert loop.run_turn() is False and loop.run_turn() is False
+    assert opened == []  # muted: the mic is never opened, not even by the stop-word monitor
+    loop.unmute()  # the F8 hotkey
+    assert loop.run_turn() is True and said[-1] == "Listening."
+    loop.run_turn()
+    assert agent.prompts[-1] == "never heard" or agent.prompts[-1] == "list files"
+
+
+def test_muted_still_hears_only_unmute_or_claude_unmute(monkeypatch, tmp_path):
+    import voice_agent.main as m
+    monkeypatch.setattr(m, "SESSION_PATH", tmp_path / "session.stamp")
+    loop, agent, said = make_loop(
+        ["list files", "mute", "list the tests", "Claude run it", "unmute", "run it now", "mute", "Claude, unmute",
+         "again"],
+        {"listen_mode": "auto"})
+    loop.run_turn()
+    loop.run_turn()
+    assert loop.mic_muted
+    assert loop.run_turn() is False and loop.run_turn() is False and agent.prompts == ["list files"]  # ignored
+    assert loop.run_turn() is True and said[-1] == "Listening." and not loop.mic_muted
+    loop.run_turn()
+    loop.run_turn()  # mute again
+    loop.run_turn()  # "Claude, unmute"
+    assert not loop.mic_muted and said[-1] == "Listening."
+    loop.run_turn()
+    assert agent.prompts == ["list files", "run it now", "again"]

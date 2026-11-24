@@ -9,6 +9,8 @@ import tempfile
 from ..config import GUARD_ENV, log
 from .filters import clean_for_speech
 
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)  # Windows: do not pop up a console for `claude -p`
+
 SUMMARY_PROMPT = (
     "Rewrite the assistant message below so it can be spoken aloud to a developer "
     "who is not looking at the screen. Rules: 1 to 3 short plain sentences, no markdown, "
@@ -57,7 +59,7 @@ def summarize(text: str, cfg: dict) -> str:
              "--no-session-persistence", "--disable-slash-commands"],
             input=build_prompt(cfg) + text[:6000],  # via stdin: multi-line args break on Windows
             capture_output=True, text=True, encoding="utf-8", timeout=cfg["summarizer_timeout"],
-            env=env, cwd=tempfile.gettempdir(),
+            env=env, cwd=tempfile.gettempdir(), creationflags=_NO_WINDOW,
         )
         out = proc.stdout.strip()
         if proc.returncode == 0 and out:

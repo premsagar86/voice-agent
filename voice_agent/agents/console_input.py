@@ -7,6 +7,7 @@ Runs as a tiny helper process because AttachConsole detaches the caller from its
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 
@@ -34,9 +35,28 @@ def mode_from_screen(rows: list[str]) -> str | None:
 
 # ------------------------------------------------------------------ parent side
 def plan_prompt_on_screen(rows: list[str]) -> bool:
-    """True while Claude Code shows its plan approval dialog (accept / keep planning)."""
+    """True while Claude Code shows its plan approval dialog (Yes / Yes / Tell Claude what to change)."""
     text = " ".join(rows[-25:]).lower()
-    return "keep planning" in text or "would you like to proceed" in text or "ready to code" in text
+    return any(k in text for k in ("tell claude what to change", "keep planning", "would you like to proceed",
+                                   "ready to code", "ready to execute"))
+
+
+def tool_prompt_on_screen(rows: list[str]) -> bool:
+    """True while Claude Code asks permission for a tool ("Do you want to proceed?" with a numbered Yes)."""
+    text = " ".join(rows[-25:]).lower()
+    return "do you want to" in text and "1. yes" in text.replace("  ", " ")
+
+
+_OPTION = re.compile(r"^\s*[>❯›»]\s*(\d)\.")
+
+
+def plan_option_selected(rows: list[str]) -> int | None:
+    """Number of the option the cursor (>) is on in the plan dialog, or None if it can't be seen."""
+    for row in reversed(rows[-25:]):
+        m = _OPTION.match(row)
+        if m:
+            return int(m.group(1))
+    return None
 
 
 def pick_cli_pid(procs: list[dict]) -> int:

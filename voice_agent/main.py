@@ -40,13 +40,35 @@ CLOSE_PHRASES = {"goodbye", "good bye", "bye", "that s all", "thats all", "thank
                  "thank you jarvis", "bye jarvis", "goodbye jarvis"}  # end the open conversation
 
 
+UNMUTE_PHRASES = {"unmute", "un mute", "unmuted", "on mute", "unmute mic", "unmute the mic", "unmute please"}
+_UNMUTE_PREFIX = ("hey claude", "claude", "hey jarvis", "jarvis")  # "Claude, unmute" works too
+
+
+def is_unmute_phrase(text: str) -> bool:
+    t = normalize(text)
+    for prefix in _UNMUTE_PREFIX:
+        if t.startswith(prefix + " "):
+            t = t[len(prefix):].strip()
+            break
+    return t in UNMUTE_PHRASES
+
+
+def wake_phrases(cfg: dict) -> list[str]:
+    """All phrases that wake the app: `wake_words` (list) plus the older single `wake_word`."""
+    words = list(cfg.get("wake_words") or [])
+    if cfg.get("wake_word") and cfg["wake_word"] not in words:
+        words.insert(0, cfg["wake_word"])
+    return words
+
+
 class VoiceLoop:
     """One spoken turn per `run_turn`. All I/O is injected so it can be tested."""
 
     def __init__(self, cfg: dict, record: Callable, transcribe: Callable, agent: AgentAdapter,
                  speak: Callable = tts.speak, show: Callable[[str], None] = print,
                  summarise: Callable = speech_text, monitor: Callable | None = None,
-                 stop_monitor: Callable | None = None):
+                 stop_monitor: Callable | None = None, clapper=None):
+        self.clapper = clapper  # mic.ClapDetector or None: a double clap approves the prompt on screen
         self.cfg, self.record, self.transcribe = cfg, record, transcribe
         self.agent, self.speak, self.show, self.summarise = agent, speak, show, summarise
         self.monitor = monitor  # factory returning a context manager that watches for barge-in
@@ -57,6 +79,8 @@ class VoiceLoop:
         self.pending = ""  # a risky request waiting for a spoken "confirm"
         self.approval: tuple = ()  # ((allow_spec, label), ...) tools waiting for a spoken "approve"
         self._session_seen = self._session_stamp()  # a newer stamp = a new CLI session started
+        self.mic_muted = False  # "mute": the mic is closed completely (no OS mic icon) until the unmute hotkey
+        self._announce_unmute = False
         self._awake_until = 0.0  # after the wake word, sentences without it are accepted until this time
 
     @staticmethod
@@ -76,10 +100,34 @@ class VoiceLoop:
         mode = getattr(self.agent, "permission_mode", "") if state == LISTENING else ""
         self.show(f"[{state}]" + (f" [mode: {mode}]" if mode else ""))
 
+    def _on_clap(self) -> None:
+        """Double clap: approve the plan screen or a tool permission, if one is waiting (never risky ones)."""
+        approve = getattr(self.agent, "approve_prompt", None)
+        result = approve() if approve else "none"
+        if result == "plan":
+            self._say("Plan approved, manual edits.")
+        elif result == "tool":
+            self._say("Approved.")
+        elif result == "risky":
+            self._say("That looks risky. Approve it by hand.")
+        elif result == "unreadable":
+            self._say("I could not read the Claude screen to approve.")
+        else:
+            self.show("(double clap: nothing waiting for approval)")
+
+    def unmute(self) -> None:
+        """Called from the unmute hotkey (another thread): the next turn reopens the mic and says Listening."""
+        if self.mic_muted:
+            self.mic_muted, self._announce_unmute = False, True
+
+    def _mic_monitor(self, factory):
+        """A listener that opens the mic, or nothing while muted (so no mic icon shows)."""
+        return factory() if factory and not self.mic_muted else contextlib.nullcontext()
+
     def _say(self, text: str) -> None:
         self.show(f"Claude: {text}")
         self._set(SPEAKING)
-        with (self.monitor() if self.monitor else contextlib.nullcontext()):
+        with self._mic_monitor(self.monitor):
             self.speak(text, self.cfg)
         self._set(IDLE)
 
@@ -97,6 +145,13 @@ class VoiceLoop:
         elif name == "listen":  # open the conversation: no wake word needed until the session ends
             self._open_window(float(self.cfg.get("wake_timeout", -1)) or -1)
             self._say("Listening.")
+        elif name == "mute":  # close the mic completely until the unmute hotkey
+            self._awake_until = 0.0
+            self.mic_muted = True
+            if self.cfg.get("mute_mode", "listen") == "off":
+                self.show(f"(muted, mic closed: press {self.cfg.get('unmute_hotkey', 'f8').upper()} to unmute)")
+            else:
+                self.show("(muted: only \"unmute\" or \"Claude unmute\" is heard)")
         elif name == "chat":  # a plan is waiting: do not accept it, then take the changes you say next
             rejected = self.agent.reject_plan() if hasattr(self.agent, "reject_plan") else None
             if rejected:
@@ -122,23 +177,31 @@ class VoiceLoop:
             self._say("Started a new session.")
         elif name in PERMISSION_MODES:
             mode, label = PERMISSION_MODES[name]
+            announce = self.cfg.get("announce_mode", False)
             if hasattr(self.agent, "set_mode"):  # real CLI: press Shift+Tab
                 note = self.agent.set_mode(mode)
-                self._say(f"{label} mode. {note}")
+                failed = note.startswith(("I could not", "I pressed"))
+                if announce or failed:  # a failed change is never silent
+                    self._say(f"{label} mode. {note}")
+                else:
+                    self.show(f"(mode: {label}. {note})")
             else:
                 self.agent.permission_mode = mode
-                self._say(f"{label} mode. {MODE_HELP[mode]}")
+                if announce:
+                    self._say(f"{label} mode. {MODE_HELP[mode]}")
+                else:
+                    self.show(f"(mode: {label})")
         elif name == "mode_query":
             if hasattr(self.agent, "current_mode"):  # real CLI: what its screen shows right now
                 seen = self.agent.current_mode()
                 if seen is None:
                     self._say("I could not read the Claude screen.")
                 else:
-                    self._say(f"{self.agent.NAMES.get(seen, seen)} mode is on.")
+                    self._say(f"{self.agent.NAMES.get(seen, seen)} mode.")
                 return
             mode = getattr(self.agent, "permission_mode", "")
             label = next((l for m, l in PERMISSION_MODES.values() if m == mode), "Default")
-            self._say(f"{label} mode. {MODE_HELP.get(mode, '')}")
+            self._say(f"{label} mode.")
         elif name == "cancel":
             self.pending = ""
             self._say("Cancelled.")
@@ -146,24 +209,50 @@ class VoiceLoop:
     # ----------------------------------------------------------------- turn
     def run_turn(self) -> bool:
         """Returns False if nothing was heard."""
+        if self.mic_muted:
+            if self.cfg.get("mute_mode", "listen") == "off":  # mic fully closed: only the unmute hotkey wakes it
+                time.sleep(0.2)
+                return False
+            # muted: the mic stays open but everything is ignored except "unmute" / "Claude, unmute"
+            audio = self.record()
+            if self.clapper and self.clapper.consume():
+                return False  # muted: claps are ignored too
+            heard = (self.transcribe(audio) or "").strip()
+            if heard and is_unmute_phrase(heard):
+                self.mic_muted = False
+                self._open_window(float(self.cfg.get("wake_timeout", -1)) or -1)
+                self._say("Listening.")
+                return True
+            if heard:
+                self.show("(muted: say unmute or Claude unmute)")
+            return False
+        if self._announce_unmute:
+            self._announce_unmute = False
+            self._open_window(float(self.cfg.get("wake_timeout", -1)) or -1)
+            self._say("Listening.")
+            return True
         self._set(LISTENING)
         audio = self.record()
+        if self.clapper and self.clapper.consume():
+            self._on_clap()
+            self._set(IDLE)
+            return True
         self._set(TRANSCRIBING)
         text = (self.transcribe(audio) or "").strip()
         if not text:
             self.show("You: (nothing heard)")
             self._set(IDLE)
             return False
-        wake = self.cfg.get("wake_word", "")
+        wake = wake_phrases(self.cfg)
         if wake and self.cfg.get("listen_mode") == "auto":  # hands-free: only speech addressed to us counts
             timeout = float(self.cfg.get("wake_timeout", -1))
             stamp = self._session_stamp()
             if stamp != self._session_seen:  # new session: the wake word is needed again
                 self._session_seen, self._awake_until = stamp, 0.0
             awake = time.monotonic() < self._awake_until
-            rest = strip_wake_word(text, wake)
-            if rest is None and parse_command(text) in ("chat", "listen", "esc"):
-                rest = text  # "chat", "listen" and "esc" work without the wake word
+            # "chat", "listen", "unmute", "mute" and "esc" work without a wake word (and "listen" alone is
+            # the command, not a wake word followed by nothing)
+            rest = text if parse_command(text) in ("chat", "listen", "mute", "esc") else strip_wake_word(text, wake)
             if rest is None:
                 if not awake:
                     self.show(f"(ignored, no wake word: {text})")
@@ -180,6 +269,8 @@ class VoiceLoop:
                 self._say("Very good.")
                 return True
             self._open_window(timeout)
+            if parse_command(text) == "mute":
+                self._awake_until = 0.0  # muting must not re-open the conversation
         self.show(f"You: {text}")
         tts.stop_speaking()  # a new request cuts off the previous answer
 
@@ -224,7 +315,7 @@ class VoiceLoop:
         self._set(WORKING)
         texts, final, error, denials = [], "", "", ()
         self.cancelled = False
-        with (self.stop_monitor() if self.stop_monitor else contextlib.nullcontext()):
+        with self._mic_monitor(self.stop_monitor):
             for ev in self.agent.send(text):
                 if self.cancelled:
                     break
@@ -263,7 +354,7 @@ def main() -> int:
 
     cfg = load_config()
     stt = Transcriber(cfg["whisper_model"], cfg["whisper_compute_type"],
-                      cfg.get("wake_word", "") if cfg.get("listen_mode") == "auto" else "")
+                      ", ".join(wake_phrases(cfg)) if cfg.get("listen_mode") == "auto" else "")
     print("Loading speech model (first run downloads it, this can take a while)...", flush=True)
     stt.load()
     print("Speech model ready.", flush=True)
@@ -326,8 +417,9 @@ def main() -> int:
             agent = InteractiveAdapter()
     else:
         agent = ClaudeCodeAdapter(timeout=cfg["agent_timeout"])
+    clapper = mic.ClapDetector(float(cfg.get("clap_threshold", 0.15))) if cfg.get("clap_approve") else None
     if cfg["listen_mode"] == "auto":
-        record = lambda: heard(mic.record_auto(cfg["vad_threshold"], cfg["vad_silence"]))  # noqa: E731
+        record = lambda: heard(mic.record_auto(cfg["vad_threshold"], cfg["vad_silence"], clapper))  # noqa: E731
         hint = "Just speak"
     else:
         record = lambda: heard(mic.record_while_pressed(  # noqa: E731
@@ -340,9 +432,11 @@ def main() -> int:
         monitor = stop_monitor
     elif cfg["barge_in"]:
         monitor = lambda: mic.BargeInMonitor(tts.stop_speaking, cfg["barge_in_threshold"])  # noqa: E731
-    loop = VoiceLoop(cfg, record, stt.transcribe, agent, monitor=monitor, stop_monitor=stop_monitor)
+    loop = VoiceLoop(cfg, record, stt.transcribe, agent, monitor=monitor, stop_monitor=stop_monitor, clapper=clapper)
     hotkey = mic.StopHotkey(loop.stop_now, cfg["stop_hotkey"])
     hotkey.__enter__()  # F10 anywhere = stop
+    unmute_key = mic.StopHotkey(loop.unmute, cfg.get("unmute_hotkey", "f8"))
+    unmute_key.__enter__()  # F8 anywhere = unmute (the mic is fully closed while muted)
     print(f"{hint}. Press {cfg['stop_hotkey'].upper()} (or say stop) to silence. Ctrl+C to quit. Working in: {agent.cwd}")
     print('Commands: "repeat that", "stop", "brief", "explain in detail", "new session".')
     print('Modes: "auto mode", "plan mode", "accept edits on mode", "manual mode".')
@@ -370,6 +464,7 @@ def main() -> int:
         return 1
     finally:
         hotkey.__exit__(None, None, None)
+        unmute_key.__exit__(None, None, None)
 
 
 if __name__ == "__main__":

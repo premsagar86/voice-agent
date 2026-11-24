@@ -11,7 +11,9 @@ from typing import Callable, Iterator
 
 from ..config import ROOT
 from .base import Event
-from .console_input import mode_from_screen, plan_prompt_on_screen
+from ..approvals import is_destructive
+from .console_input import (mode_from_screen, plan_option_selected, plan_prompt_on_screen,
+                            tool_prompt_on_screen)
 
 STATE_PATH = ROOT / "mode_state.json"  # last permission mode seen by the UserPromptSubmit hook
 CYCLE = ["default", "acceptEdits", "plan", "auto"]  # Shift+Tab order in Claude Code
@@ -57,7 +59,41 @@ class InteractiveAdapter:
         self.cwd = "the focused Claude Code window"
         self.permission_mode = ""
 
+    def _screen(self) -> list[str] | None:
+        reader = getattr(self.keys, "read_screen", None)
+        if reader is None:
+            return None
+        try:
+            return reader()
+        except Exception:
+            return None
+
+    def _plan_waiting(self) -> bool:
+        rows = self._screen()
+        return bool(rows and plan_prompt_on_screen(rows))
+
+    def _select_feedback_option(self) -> bool:
+        """Move the cursor to option 3 ("Tell Claude what to change") and confirm it on screen."""
+        for _ in range(5):
+            rows = self._screen()
+            if not rows:
+                return False
+            cur = plan_option_selected(rows)
+            if cur == 3:
+                return True
+            if cur is None:
+                return False
+            try:
+                self.keys.send("down")
+            except Exception:
+                return False
+            self.sleep(0.2)
+        return False
+
     def send(self, prompt: str) -> Iterator[Event]:
+        if self._plan_waiting() and not self._select_feedback_option():
+            # Typing + Enter on option 1 would ACCEPT the plan: if option 3 can't be reached, send nothing.
+            return iter(())
         self.keys.write(prompt)
         self.sleep(self.pause)
         self.keys.send("enter")
@@ -76,26 +112,61 @@ class InteractiveAdapter:
 
     def interrupt(self) -> None:
         """Send Esc, but only while Claude works: Esc twice on an idle prompt opens the rewind menu."""
-        if self.is_working() is False:
+        if self.is_working() is False and not self._plan_waiting():
             return
         try:
             self.keys.send("esc")
         except Exception:
             pass
 
-    def reject_plan(self) -> bool | None:
-        """Esc on the plan approval dialog: do not accept, stay in plan mode so the next message can say what
-        to change. True if rejected, False if no plan is waiting, None if the screen can't be read."""
-        reader = getattr(self.keys, "read_screen", None)
-        if reader is None:
-            return None
-        try:
-            if not plan_prompt_on_screen(reader()):
+    def _select_option(self, number: int) -> bool:
+        """Move the cursor to option `number` (1-based) and confirm it on screen."""
+        for _ in range(6):
+            rows = self._screen()
+            cur = plan_option_selected(rows) if rows else None
+            if cur is None:
                 return False
-            self.keys.send("esc")
-            return True
+            if cur == number:
+                return True
+            try:
+                self.keys.send("down" if cur < number else "up")
+            except Exception:
+                return False
+            self.sleep(0.2)
+        return False
+
+    def approve_prompt(self) -> str:
+        """Approve what is on screen (used by a double clap). Returns "plan", "tool", "risky", "none" or
+        "unreadable". Plan screen: option 2 (manual approve). Tool permission: option 1 (Yes). Anything that
+        looks destructive is NEVER approved this way."""
+        rows = self._screen()
+        if rows is None:
+            return "unreadable"
+        if plan_prompt_on_screen(rows):
+            kind, number = "plan", 2
+        elif tool_prompt_on_screen(rows):
+            kind, number = "tool", 1
+            if is_destructive(" ".join(rows[-25:])):
+                return "risky"
+        else:
+            return "none"
+        if not self._select_option(number):
+            return "unreadable"
+        try:
+            self.keys.send("enter")
         except Exception:
+            return "unreadable"
+        return kind
+
+    def reject_plan(self) -> bool | None:
+        """Go to option 3 of the plan dialog ("Tell Claude what to change") so the next sentence is typed as
+        feedback. True if there, False if no plan is waiting, None if the screen can't be read."""
+        rows = self._screen()
+        if rows is None:
             return None
+        if not plan_prompt_on_screen(rows):
+            return False
+        return True if self._select_feedback_option() else None
 
     def new_session(self) -> None:
         for _ in self.send("/clear"):

@@ -26,7 +26,13 @@ DEFAULT_CONFIG = {
     "barge_in": False,  # speaking over the voice stops it (use headphones)
     "barge_in_threshold": 0.08,
     "wake_word": "",  # hands-free only: e.g. "hey claude"; empty = every utterance counts
+    "clap_approve": False,  # hands-free only: a double clap approves the plan screen / a tool permission (never risky ones)
+    "clap_threshold": 0.15,  # how loud a clap must be (mic level); raise it if desk bumps trigger it
+    "mute_mode": "listen",  # "listen" = muted but still hears "unmute" / "Claude unmute"; "off" = mic fully closed (use the hotkey)
+    "unmute_hotkey": "f8",  # global key: unmute after saying "mute" (the mic is fully closed while muted)
+    "wake_words": [],  # extra wake phrases, e.g. ["hey jarvis", "claude", "listen"]; any one unmutes the app
     "wake_timeout": -1,  # after the wake word: -1 = open until the session ends, N = seconds of quiet, 0 = say it every time
+    "announce_mode": False,  # True = speak a confirmation after "plan mode" / "auto mode" etc.; False = change silently
     "persona": "",  # "jarvis" = spoken summaries in a calm, dry, butler-like voice; empty = plain
     "target": "interactive",  # "interactive" = type into the focused Claude Code CLI, "headless" = hidden claude -p
     "cli_pid": 0,  # interactive target: PID of the Claude CLI (0 = find it automatically)

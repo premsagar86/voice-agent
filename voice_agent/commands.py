@@ -9,9 +9,12 @@ _COMMANDS: dict[str, tuple[str, ...]] = {
     "repeat": ("repeat that", "repeat", "say that again", "say it again", "what did you say"),
     "stop": ("stop", "stop it", "skip", "be quiet", "quiet", "stop talking", "skip that",
              "enough", "that s enough", "thats enough", "hush"),
+    "mute": ("mute", "mute mic", "mute the mic", "go quiet", "mute yourself"),  # close the conversation, stay muted
     "esc": ("esc", "escape", "press escape", "hit escape", "press esc"),
-    "chat": ("chat", "chart", "chat mode", "let s chat", "lets chat", "change the plan"),  # reject the plan, say what to change
-    "listen": ("listen", "listen to me", "start listening", "start chat", "start chatting"),  # open the conversation
+    "chat": ("chat", "chart", "chat mode", "let s chat", "lets chat", "let chat", "let chart", "let s chart", "lets chart", "let us chat", "let us chart",
+             "change the plan"),  # reject the plan, say what to change
+    "listen": ("listen", "listen to me", "start listening", "start chat", "start chatting", "unmute", "un mute",
+               "unmute mic", "unmute the mic"),  # open the conversation
     "brief": ("brief", "be brief", "keep it short", "key points", "just the key points",
               "important points", "the important points", "only important points"),
     "summary": ("summary", "short summary", "summarize", "summarise"),
@@ -26,7 +29,8 @@ _COMMANDS: dict[str, tuple[str, ...]] = {
                     "auto accept", "auto accept mode", "auto accept edits"),
     "mode_manual": ("manual mode", "manual", "switch to manual mode", "change to manual mode",
                     "write mode"),
-    "mode_query": ("what mode", "which mode", "current mode", "what mode are you in", "what mode is it"),
+    "mode_query": ("what mode", "which mode", "current mode", "what mode are you in", "what mode is it",
+                   "which mode am i in", "what mode is claude in", "current mode please", "mode"),
     "cancel": ("cancel", "cancel that", "never mind", "nevermind", "no"),
 }
 
@@ -51,7 +55,19 @@ def _dedupe(t: str) -> str:
     return " ".join(w for i, w in enumerate(words) if i == 0 or w != words[i - 1])
 
 
-def strip_wake_word(text: str, wake: str) -> str | None:
+def strip_wake_word(text: str, wake) -> str | None:
+    """`wake` is one phrase or a list of them; the first phrase that matches wins."""
+    phrases = [wake] if isinstance(wake, str) else [w for w in (wake or []) if w]
+    if not phrases:
+        return text
+    for w in phrases:
+        rest = _strip_one(text, w)
+        if rest is not None:
+            return rest
+    return None
+
+
+def _strip_one(text: str, wake: str) -> str | None:
     """Text after the wake phrase ("hey claude list files" -> "list files"), or None if absent."""
     w, t = normalize(wake), normalize(text)
     if not w:
@@ -63,7 +79,10 @@ def strip_wake_word(text: str, wake: str) -> str | None:
     words = re.sub(r"^[^\w]+", "", text).split()
     wl = w.split()
     for n in dict.fromkeys((len(wl), 1)):
-        if n <= len(words) and difflib.SequenceMatcher(None, normalize(" ".join(words[:n])), w).ratio() >= 0.75:
+        cand = normalize(" ".join(words[:n])) if n <= len(words) else ""
+        if len(wl) == 1 and abs(len(cand) - len(w)) > 1:
+            continue  # one-word wake phrase: "list" must not pass for "listen"
+        if cand and difflib.SequenceMatcher(None, cand, w).ratio() >= (0.7 if len(wl) == 1 and len(w) >= 5 else 0.75):
             return " ".join(words[n:]).strip(" ,.:;!") or ""
     name = wl[-1]
     if len(wl) > 1 and len(name) >= 4 and words and \

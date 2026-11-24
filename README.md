@@ -51,10 +51,15 @@ Hands-free: `"listen_mode": "auto"` plus a wake word, e.g. `"wake_word": "hey ja
   (`"wake_timeout": -1`; use N for "N seconds of quiet", `0` for "wake word every time").
 - A new Claude session (or `/clear`, or "new session") closes the conversation: say the wake word again.
 - `chat` opens the conversation without the wake word. `esc` / `escape` presses Escape in the CLI to interrupt Claude.
-- `goodbye` / `that's all` closes the conversation early.
+- `goodbye` / `that's all` closes the conversation early. `mute` ignores everything except `unmute` / `Claude unmute` (mic stays open). `"mute_mode": "off"` closes the mic completely (no mic icon) until you press `F8` (`"unmute_hotkey"`).
+- `"wake_words": ["hey jarvis", "claude", "listen"]` lists several wake phrases; any one unmutes the app.
 - A sound-alike of the wake word is accepted, and short clicks or noises do not trigger or extend a recording.
 - `"vad_silence": 3` waits 3 s of quiet before sending, so natural pauses do not cut you off.
 - `"persona": "jarvis"` makes spoken summaries calm and butler-like.
+- Mode commands ("plan mode", "auto mode", ...) change the mode silently; set `"announce_mode": true` to hear a confirmation. Failures are always spoken.
+- `"clap_approve": true` (hands-free only): a double clap approves what Claude is asking. Plan screen: option 2
+  (Yes, manually approve edits). Tool permission: option 1 (Yes). Anything that looks destructive (rm -rf, delete,
+  force push...) is never approved by clap. Raise `"clap_threshold"` (default 0.15) if a desk bump triggers it.
 - Use headphones so the mic does not hear Claude.
 
 Risky requests (delete, rm -rf, force push, drop table...) wait for a spoken `confirm`.
